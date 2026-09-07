@@ -16,13 +16,21 @@
     --border: #2c3a42;
   }
   * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;color: var(--text);
-    padding: 24px 16px 60px;
-    min-height: 100vh;
-    position: relative;
-  }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  color: var(--text);
+  padding: 24px 16px 60px;
+  min-height: 100vh;
+  position: relative;
+
+  background: linear-gradient(
+    135deg,
+    #3a3f44 0%,
+    #24292e 45%,
+    #14181c 100%
+  );
+}
   body::before {
     content: "";
     position: fixed;
