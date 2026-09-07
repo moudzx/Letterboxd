@@ -57,12 +57,6 @@
   }
   button:disabled { background: #2c3a42; color: var(--muted); cursor: not-allowed; }
   button:hover:not(:disabled) { background: var(--green-dark); }
-  .note {
-    font-size: 0.8rem;
-    color: var(--muted);
-    margin-bottom: 20px;
-    line-height: 1.4;
-  }
   .status {
     padding: 12px 14px;
     border-radius: 6px;
@@ -133,11 +127,6 @@
   <div class="form-row">
     <input type="text" id="username" placeholder="letterboxd username" autocomplete="off" />
     <button id="checkBtn">Check</button>
-  </div>
-  <div class="note">
-    This runs entirely in your browser and reads public Letterboxd pages through a CORS proxy.
-    Large following lists take a while since every page has to be fetched one by one.
-    The profile must be public for this to work.
   </div>
 
   <div class="status" id="status"></div>
@@ -246,43 +235,71 @@ function parsePeople(html, currentUsername) {
   return people;
 }
 
-function hasNextPage(html, username, kind, currentPage) {
+function getMaxPageNumber(html, username, kind) {
   const doc = new DOMParser().parseFromString(html, "text/html");
-  const nextHref = "/" + username + "/" + kind + "/page/" + (currentPage + 1) + "/";
-  return Array.from(doc.querySelectorAll("a[href]")).some(a => {
+  const pattern = new RegExp("^/" + username + "/" + kind + "/page/(\\d+)/?$");
+  let max = 1;
+  doc.querySelectorAll("a[href]").forEach(a => {
     const href = a.getAttribute("href") || "";
-    return href === nextHref || href.endsWith(nextHref);
+    const match = href.match(pattern);
+    if (match) {
+      const n = parseInt(match[1], 10);
+      if (n > max) max = n;
+    }
   });
+  return max;
 }
 
+const PAGE_CONCURRENCY = 6;
+const MAX_PAGES = 500;
+
 async function fetchAllPeople(username, kind, onProgress) {
-  const people = [];
   const seen = new Set();
-  let page = 1;
-  const MAX_PAGES = 200;
+  const people = [];
 
-  while (page <= MAX_PAGES) {
-    const url = "https://letterboxd.com/" + username + "/" + kind + "/page/" + page + "/";
-    const html = await fetchPage(url, attempt => {
-      onProgress(kind, page, attempt);
-    });
-
-    if (page === 1 && /Sorry, we can.t find the page/i.test(html)) {
-      throw new Error("User not found: " + username);
-    }
-
-    const pagePeople = parsePeople(html, username);
-    if (pagePeople.length === 0) break;
-
-    pagePeople.forEach(p => {
+  const addPeople = list => {
+    list.forEach(p => {
       if (!seen.has(p.handle)) {
         seen.add(p.handle);
         people.push(p);
       }
     });
+  };
 
-    if (!hasNextPage(html, username, kind, page)) break;
-    page += 1;
+  const firstUrl = "https://letterboxd.com/" + username + "/" + kind + "/page/1/";
+  const firstHtml = await fetchPage(firstUrl, attempt => onProgress(kind, 1, null, attempt));
+
+  if (/Sorry, we can.t find the page/i.test(firstHtml)) {
+    throw new Error("User not found: " + username);
+  }
+
+  addPeople(parsePeople(firstHtml, username));
+
+  let totalPages = getMaxPageNumber(firstHtml, username, kind);
+  if (totalPages > MAX_PAGES) totalPages = MAX_PAGES;
+
+  onProgress(kind, 1, totalPages, 1);
+
+  if (totalPages > 1) {
+    const pageNumbers = [];
+    for (let p = 2; p <= totalPages; p++) pageNumbers.push(p);
+    let cursor = 0;
+
+    async function worker() {
+      while (cursor < pageNumbers.length) {
+        const pageNum = pageNumbers[cursor++];
+        const url = "https://letterboxd.com/" + username + "/" + kind + "/page/" + pageNum + "/";
+        const html = await fetchPage(url, attempt => onProgress(kind, pageNum, totalPages, attempt));
+        addPeople(parsePeople(html, username));
+        onProgress(kind, pageNum, totalPages, 1);
+      }
+    }
+
+    const workers = Array.from(
+      { length: Math.min(PAGE_CONCURRENCY, pageNumbers.length) },
+      () => worker()
+    );
+    await Promise.all(workers);
   }
 
   return people;
@@ -340,15 +357,28 @@ async function runCheck() {
   clearStatus();
 
   try {
-    setStatus("Fetching who " + username + " follows...", false);
-    const following = await fetchAllPeople(username, "following", (kind, page, attempt) => {
-      setStatus("Fetching following list, page " + page + (attempt > 1 ? " (retry " + attempt + ")" : "") + "...", false);
-    });
+    const progress = { following: "starting...", followers: "starting..." };
+    const renderProgress = () => {
+      setStatus("Following: " + progress.following + "   |   Followers: " + progress.followers, false);
+    };
+    renderProgress();
 
-    setStatus("Fetching " + username + "'s followers...", false);
-    const followers = await fetchAllPeople(username, "followers", (kind, page, attempt) => {
-      setStatus("Fetching followers list, page " + page + (attempt > 1 ? " (retry " + attempt + ")" : "") + "...", false);
-    });
+    const describe = (page, totalPages, attempt) => {
+      const of = totalPages ? " of " + totalPages : "";
+      const retry = attempt > 1 ? " (retry " + attempt + ")" : "";
+      return "page " + page + of + retry;
+    };
+
+    const [following, followers] = await Promise.all([
+      fetchAllPeople(username, "following", (kind, page, totalPages, attempt) => {
+        progress.following = describe(page, totalPages, attempt);
+        renderProgress();
+      }),
+      fetchAllPeople(username, "followers", (kind, page, totalPages, attempt) => {
+        progress.followers = describe(page, totalPages, attempt);
+        renderProgress();
+      })
+    ]);
 
     const followerHandles = new Set(followers.map(p => p.handle));
     const notFollowingBack = following.filter(p => !followerHandles.has(p.handle));
