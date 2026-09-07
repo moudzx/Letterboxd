@@ -57,6 +57,12 @@
   }
   button:disabled { background: #2c3a42; color: var(--muted); cursor: not-allowed; }
   button:hover:not(:disabled) { background: var(--green-dark); }
+  .note {
+    font-size: 0.8rem;
+    color: var(--muted);
+    margin-bottom: 20px;
+    line-height: 1.4;
+  }
   .status {
     padding: 12px 14px;
     border-radius: 6px;
@@ -127,6 +133,11 @@
   <div class="form-row">
     <input type="text" id="username" placeholder="letterboxd username" autocomplete="off" />
     <button id="checkBtn">Check</button>
+  </div>
+  <div class="note">
+    This runs entirely in your browser and reads public Letterboxd pages through a CORS proxy.
+    Large following lists take a while since every page has to be fetched one by one.
+    The profile must be public for this to work.
   </div>
 
   <div class="status" id="status"></div>
@@ -250,8 +261,9 @@ function getMaxPageNumber(html, username, kind) {
   return max;
 }
 
-const PAGE_CONCURRENCY = 6;
+const PAGE_CONCURRENCY = 3;
 const MAX_PAGES = 500;
+const EMPTY_PAGE_RETRIES = 3;
 
 async function fetchAllPeople(username, kind, onProgress) {
   const seen = new Set();
@@ -285,12 +297,31 @@ async function fetchAllPeople(username, kind, onProgress) {
     for (let p = 2; p <= totalPages; p++) pageNumbers.push(p);
     let cursor = 0;
 
+    async function fetchPageWithContent(pageNum) {
+      const url = "https://letterboxd.com/" + username + "/" + kind + "/page/" + pageNum + "/";
+      let pagePeople = [];
+
+      for (let emptyAttempt = 1; emptyAttempt <= EMPTY_PAGE_RETRIES; emptyAttempt++) {
+        const html = await fetchPage(url, attempt => onProgress(kind, pageNum, totalPages, attempt));
+        pagePeople = parsePeople(html, username);
+        if (pagePeople.length > 0) return pagePeople;
+        if (emptyAttempt < EMPTY_PAGE_RETRIES) await sleep(1200 * emptyAttempt);
+      }
+
+      throw new Error(
+        "Page " + pageNum + " of " + kind + " came back empty " + EMPTY_PAGE_RETRIES +
+        " times in a row (likely rate-limited) \u2014 try again in a minute"
+      );
+    }
+
     async function worker() {
       while (cursor < pageNumbers.length) {
-        const pageNum = pageNumbers[cursor++];
-        const url = "https://letterboxd.com/" + username + "/" + kind + "/page/" + pageNum + "/";
-        const html = await fetchPage(url, attempt => onProgress(kind, pageNum, totalPages, attempt));
-        addPeople(parsePeople(html, username));
+        const myTurn = cursor++;
+        // stagger requests slightly so we don't burst everything at once
+        await sleep(myTurn === 0 ? 0 : 250 + Math.random() * 250);
+        const pageNum = pageNumbers[myTurn];
+        const pagePeople = await fetchPageWithContent(pageNum);
+        addPeople(pagePeople);
         onProgress(kind, pageNum, totalPages, 1);
       }
     }
