@@ -290,7 +290,7 @@ async function fetchPage(targetUrl, onAttempt) {
 function parsePeople(html, currentUsername) {
   const doc = new DOMParser().parseFromString(html, "text/html");
   const anchors = Array.from(doc.querySelectorAll("a[href]"));
-  const followersLinkPattern = /^\/([A-Za-z0-9_]+)\/followers\/?$/;
+  const followersLinkPattern = /^\/([A-Za-z0-9_\-.]+)\/followers\/?$/;
   const seenHandles = new Set();
   const people = [];
 
@@ -321,13 +321,9 @@ function parsePeople(html, currentUsername) {
   return people;
 }
 
-function hasNextPage(html, username, kind, currentPage) {
+function hasNextPage(html) {
   const doc = new DOMParser().parseFromString(html, "text/html");
-  const nextHref = "/" + username + "/" + kind + "/page/" + (currentPage + 1) + "/";
-  return Array.from(doc.querySelectorAll("a[href]")).some(a => {
-    const href = a.getAttribute("href") || "";
-    return href === nextHref || href.endsWith(nextHref);
-  });
+  return !!doc.querySelector("a.next");
 }
 
 async function fetchAllPeople(username, kind, onProgress) {
@@ -356,7 +352,7 @@ async function fetchAllPeople(username, kind, onProgress) {
       }
     });
 
-    if (!hasNextPage(html, username, kind, page)) break;
+    if (!hasNextPage(html)) break;
     page += 1;
   }
 
